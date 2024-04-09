@@ -1,0 +1,342 @@
+from tkinter import messagebox, filedialog
+from tkinter import ttk
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from bs4 import BeautifulSoup
+import time
+from collections import Counter
+import re
+import jieba.analyse
+import logging
+from langdetect import detect
+import tkinter as tk
+# from tkinter.ttk import *  # 导入 ttk 模块
+
+# 设置主题样式
+def set_theme():
+    style = ttk.Style()
+    style.theme_use("vista")  # 设置默认主题样式为 "vista"
+
+# 设置日志记录器
+logging.basicConfig(filename='debug.log', level=logging.DEBUG, format='%(asctime)s %(levelname)s: %(message)s')
+
+# 创建全局变量以存储 WebDriver 实例
+driver = None
+
+# 设置默认语言和自动分析标志
+current_language = "chinese"
+auto_analyze = False
+
+# 设置文本标签
+texts = {
+    "english": {
+        "window_title": "ChatGPT Conversation Extractor",
+        "url_label": "Enter ChatGPT shared link:",
+        "fetch_button": "Fetch Conversations",
+        "save_button": "Save Conversation",
+        "analyze_button": "Analyze Conversation",
+        "conversation_text": "Conversation Text:",
+        "warning_title": "Warning",
+        "warning_message": "Unable to extract conversation.",
+        "closing_message": "Are you sure you want to exit?",
+        "language_button": "Switch Language",
+        "highlight_label": "Enter Keywords to Highlight (comma-separated):",
+        "highlight_button": "Highlight Keywords",
+        "speaker_counts_label": "Speaker Counts (English):",
+        "word_counts_label_english": "Most Common Words (English):",
+        "word_counts_label_chinese": "Most Common Words (Chinese):",
+        "save_history_menu": "Save History",
+        "clear_history_menu": "Clear History",
+        "history_cleared_message": "History has been cleared.",
+        "history_cleared_title": "History Cleared"
+    },
+    "chinese": {
+        "window_title": "ChatGPT 对话提取器",
+        "url_label": "请输入 ChatGPT 的共享链接:",
+        "fetch_button": "提取对话",
+        "save_button": "保存对话记录",
+        "analyze_button": "分析对话",
+        "conversation_text": "对话记录:",
+        "warning_title": "警告",
+        "warning_message": "无法提取对话记录。",
+        "closing_message": "确定要退出吗？",
+        "language_button": "切换语言",
+        "highlight_label": "输入要高亮显示的关键词（逗号分隔）:",
+        "highlight_button": "高亮显示关键词",
+        "speaker_counts_label": "发言次数统计 (中文):",
+        "word_counts_label_english": "最常见的词语统计 (英文):",
+        "word_counts_label_chinese": "最常见的词语统计 (中文):",
+        "save_history_menu": "保存历史记录",
+        "clear_history_menu": "清除历史记录",
+        "history_cleared_message": "历史记录已清除。",
+        "history_cleared_title": "历史记录已清除"
+    }
+}
+
+# 初始化 Selenium WebDriver
+def initialize_driver():
+    global driver
+    if driver is None:
+        chrome_service = Service("C:/Users/Admin/Desktop/chromedriver-win64/chromedriver.exe")
+        driver = webdriver.Chrome(service=chrome_service)
+        logging.info("WebDriver initialized successfully.")
+    return driver
+
+driver = initialize_driver()
+
+# 提取对话记录
+def fetch_conversations():
+    initialize_driver()
+    global driver
+    
+    # 获取用户输入的链接
+    shared_link = url_entry.get()
+
+    # 获取页面内容
+    driver.get(shared_link)
+    time.sleep(5)
+    html_content = driver.page_source
+
+    # 使用 BeautifulSoup 解析 HTML 内容
+    soup = BeautifulSoup(html_content, 'html.parser')
+
+    # 提取对话记录
+    title_elem = soup.find('h1', class_='text-3xl font-semibold leading-tight text-token-text-primary sm:text-4xl')
+    title = title_elem.get_text().strip() if title_elem else "未找到标题"
+    
+    date_elem = soup.find('div', class_='pt-3 text-base text-gray-400 sm:pt-4')
+    date = date_elem.get_text().strip() if date_elem else "未找到日期"
+
+    messages = soup.find_all('div', class_='w-full text-token-text-primary')
+    conversations = []
+
+    for message in messages:
+        speaker_name_elem = message.find('div', class_='font-semibold select-none')
+        speaker_name = speaker_name_elem.get_text().strip() if speaker_name_elem else "Anonymous"
+
+        content_elem = message.find(['div', 'p'])
+        if content_elem:
+            content = content_elem.get_text().strip()
+            if content:
+                if content.startswith(speaker_name):
+                    content = content[len(speaker_name):].strip()
+                if content.startswith("ChatGPT"):
+                    content = content.replace("ChatGPT", "").strip()
+                conversations.append((speaker_name, content))
+
+    # 显示对话记录
+    if conversations:
+        conversation_text.config(state=tk.NORMAL)
+        conversation_text.delete("1.0", tk.END)
+        conversation_text.insert(tk.END, f"标题: {title}\n日期: {date}\n\n")
+        for role, content in conversations:
+            conversation_text.insert(tk.END, f"{role}: {content}\n")
+        conversation_text.config(state=tk.DISABLED)
+        
+        if auto_analyze:
+            full_conversation_text = '\n'.join([f"{role}: {content}" for role, content in conversations])
+            analyze_conversations(full_conversation_text)
+
+    else:
+        messagebox.showwarning(texts[current_language]["warning_title"], texts[current_language]["warning_message"])
+
+# 保存对话记录
+# 1. 历史记录管理
+# 在保存对话记录的函数中，将当前输入的网址追加到历史记录文件中
+def save_conversations():
+    conversation_record = conversation_text.get("1.0", tk.END)
+    file_path = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text files", "*.txt")])
+    
+    if file_path:
+        with open(file_path, "w", encoding="utf-8") as file:
+            file.write(conversation_record)
+        messagebox.showinfo("保存成功", "对话记录已成功保存。")
+        
+        # 将当前输入的网址追加到历史记录文件中
+        with open("history.txt", "a") as history_file:
+            history_file.write(url_entry.get() + "\n")
+    else:
+        messagebox.showwarning("保存取消", "未保存对话记录。")
+
+# 在初始化函数中加载历史记录文件，并创建下拉菜单来显示历史记录
+def initialize():
+    # 创建一个下拉菜单来显示历史记录
+    history_menu = tk.Menu(root)
+    history_menu.add_command(label=texts[current_language]["clear_history_menu"], command=clear_history)
+
+    # 加载历史记录文件
+    try:
+        with open("history.txt", "r") as history_file:
+            history = history_file.readlines()
+            for url in history:
+                history_menu.add_command(label=url.strip(), command=lambda u=url.strip(): load_url(u))
+    except FileNotFoundError:
+        pass
+
+    root.config(menu=history_menu)
+
+# 分析对话记录
+def analyze_conversations():
+    conversation_record = conversation_text.get("1.0", tk.END)
+    languages = detect_language(conversation_record)
+    
+    if "english" in languages:
+        analyze_english_conversations(conversation_record)
+    if "chinese" in languages:
+        analyze_chinese_conversations(conversation_record)
+
+# 语言检测函数
+def detect_language(text):
+    is_ascii = any(ord(char) < 128 for char in text)
+    is_chinese = any(0x4e00 <= ord(char) <= 0x9fff for char in text)
+    
+    languages = []
+    if is_ascii:
+        languages.append("english")
+    if is_chinese:
+        languages.append("chinese")
+    
+    return languages
+
+# 英文对话分析
+def analyze_english_conversations(conversation_record):
+    speakers = []
+    words = []
+    for line in conversation_record.split("\n"):
+        if line.strip() and ":" in line:
+            speaker, content = line.split(":", 1)
+            speakers.append(speaker.strip())
+            words.extend(content.strip().split())
+    speaker_counts = Counter(speakers)
+    english_words = [word for word in words if all(ord(char) < 128 for char in word)]
+    word_counts = Counter(english_words)
+
+    display_analysis_results("english", speaker_counts, word_counts)
+
+# 中文对话分析
+def analyze_chinese_conversations(conversation_record):
+    words = jieba.cut(conversation_record)
+    punctuation = set(':！？｡。＂＃＄％＆＇（）＊＋，－／：；＜＝＞＠［＼］＾＿｀｛｜｝～｟｠｢｣､、〃《》「」『』【】〔〕〖〗〘〙〚〛〜〝〞〟〰〾〿–—‘’‛“”„‟…‧﹏.')
+    stopwords = set()  
+    filtered_words = [word for word in words if word not in punctuation and word not in stopwords and word.strip()]
+    word_counts = Counter(filtered_words)
+
+    display_analysis_results("chinese", None, word_counts)
+
+ANALYSIS_WINDOW_WIDTH = 600  # Increase the default width
+ANALYSIS_WINDOW_HEIGHT = 300
+# 显示分析结果
+def display_analysis_results(language, speaker_counts=None, word_counts=None):
+    analysis_window = tk.Toplevel(root)
+    analysis_window.title("Conversation Analysis")
+    analysis_window.geometry(f"{ANALYSIS_WINDOW_WIDTH}x{ANALYSIS_WINDOW_HEIGHT}")  # 使用f-string将宽度和高度格式化为字符串
+    
+    if speaker_counts:
+        speaker_label = tk.Label(analysis_window, text=texts[current_language]["speaker_counts_label"])
+        speaker_label.pack()
+        for speaker, count in speaker_counts.items():
+            speaker_info = f"{speaker}: {count} times"
+            speaker_info_label = tk.Label(analysis_window, text=speaker_info)
+            speaker_info_label.pack()
+
+    if word_counts:
+        if language == "english":
+            word_label = tk.Label(analysis_window, text=texts[current_language]["word_counts_label_english"])
+        else:
+            word_label = tk.Label(analysis_window, text=texts[current_language]["word_counts_label_chinese"])
+        word_label.pack()
+        for word, count in word_counts.most_common(5):
+            word_info = f"{word}: {count} times"
+            word_info_label = tk.Label(analysis_window, text=word_info)
+            word_info_label.pack()
+
+# 创建主窗口
+root = tk.Tk()
+root.title(texts[current_language]["window_title"])
+
+def save_history(url):
+    with open("history.txt", "a") as history_file:
+        history_file.write(url + "\n")
+
+def clear_history():
+    if messagebox.askyesno("Clear History", "Are you sure you want to clear history?"):
+        open("history.txt", "w").close()
+        messagebox.showinfo("History Cleared", "History has been cleared.")
+        initialize()  # 重新加载历史记录菜单
+
+def load_url(url):
+    url_entry.delete(0, tk.END)
+    url_entry.insert(0, url)
+
+# 在主窗口关闭时保存当前输入的网址
+root.protocol("WM_DELETE_WINDOW", lambda: save_history(url_entry.get()))
+
+
+# 2. 界面优化
+# 您可以添加一些标签或分隔线来更好地组织布局
+# 例如：
+separator = ttk.Separator(root, orient="horizontal")
+separator.pack(fill="x")
+
+# 添加标签
+conversation_label = tk.Label(root, text=texts[current_language]["conversation_text"])
+conversation_label.pack()
+
+# 3. 异常处理
+# 在fetch_conversations函数中捕获异常并提供友好的提示
+def fetch_conversations():
+    try:
+        initialize_driver()
+        # ... 其他代码
+    except Exception as e:
+        messagebox.showerror("Error", f"An error occurred: {str(e)}")
+
+# 设置主题样式
+set_theme()
+
+# 创建标签、输入框和按钮
+url_label = tk.Label(root, text=texts[current_language]["url_label"])
+url_label.pack()
+
+url_entry = tk.Entry(root, width=50)
+url_entry.pack()
+
+fetch_button = tk.Button(root, text=texts[current_language]["fetch_button"], command=fetch_conversations)
+fetch_button.pack()
+
+save_button = tk.Button(root, text=texts[current_language]["save_button"], command=save_conversations)
+save_button.pack()
+
+# 创建分析对话按钮
+analyze_button = tk.Button(root, text=texts[current_language]["analyze_button"], command=analyze_conversations)
+analyze_button.pack()
+
+conversation_text = tk.Text(root, width=80, height=20)
+conversation_text.pack()
+conversation_text.config(state=tk.DISABLED)
+
+def change_language():
+    global current_language
+    if current_language == "english":
+        current_language = "chinese"
+    else:
+        current_language = "english"
+    root.title(texts[current_language]["window_title"])
+    url_label.config(text=texts[current_language]["url_label"])
+    fetch_button.config(text=texts[current_language]["fetch_button"])
+    save_button.config(text=texts[current_language]["save_button"])
+    analyze_button.config(text=texts[current_language]["analyze_button"])
+
+language_button = tk.Button(root, text=texts[current_language]["language_button"], command=change_language)
+language_button.pack()
+
+# 关闭窗口时关闭WebDriver
+def on_closing():
+    if messagebox.askyesno(texts[current_language]["warning_title"], texts[current_language]["closing_message"]):
+        if driver is not None:
+            driver.quit()
+        root.destroy()
+
+root.protocol("WM_DELETE_WINDOW", on_closing)
+
+root.mainloop()
